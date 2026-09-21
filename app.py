@@ -4,7 +4,6 @@ import pickle
 import re
 
 import numpy as np
-import faiss
 
 from pypdf import PdfReader
 from docx import Document
@@ -28,24 +27,24 @@ st.set_page_config(
 
 st.title("📄 AI Document Assistant")
 
-DB_FILE = "document_database.pkl"
+DATABASE_FILE = "document_database.pkl"
 
 
 # ==========================
-# MODEL LOADING
+# EMBEDDING MODEL
 # ==========================
 
 @st.cache_resource
-def get_embedding_model():
+def load_embedding_model():
 
     return SentenceTransformer(
-        "sentence-transformers/all-MiniLM-L6-v2",
-        device="cpu"
+        "all-MiniLM-L6-v2"
     )
 
 
+
 # ==========================
-# EXTRACTION FUNCTIONS
+# DOCUMENT EXTRACTION
 # ==========================
 
 
@@ -55,7 +54,8 @@ def extract_pdf(file):
 
     reader = PdfReader(file)
 
-    for page_no,page in enumerate(
+
+    for page_number, page in enumerate(
         reader.pages,
         start=1
     ):
@@ -70,7 +70,7 @@ def extract_pdf(file):
 
                 "filename": file.name,
 
-                "page": page_no
+                "page": page_number
 
             })
 
@@ -89,13 +89,9 @@ def extract_docx(file):
 
 
     return [{
-
-        "text":text,
-
-        "filename":file.name,
-
-        "page":None
-
+        "text": text,
+        "filename": file.name,
+        "page": None
     }]
 
 
@@ -108,13 +104,9 @@ def extract_txt(file):
 
 
     return [{
-
-        "text":text,
-
-        "filename":file.name,
-
-        "page":None
-
+        "text": text,
+        "filename": file.name,
+        "page": None
     }]
 
 
@@ -125,6 +117,7 @@ def extract_md(file):
         "utf-8"
     )
 
+
     html=markdown.markdown(raw)
 
     text=BeautifulSoup(
@@ -134,13 +127,9 @@ def extract_md(file):
 
 
     return [{
-
-        "text":text,
-
-        "filename":file.name,
-
-        "page":None
-
+        "text": text,
+        "filename": file.name,
+        "page": None
     }]
 
 
@@ -153,13 +142,13 @@ def extract_document(file):
     if name.endswith(".pdf"):
         return extract_pdf(file)
 
-    if name.endswith(".docx"):
+    elif name.endswith(".docx"):
         return extract_docx(file)
 
-    if name.endswith(".txt"):
+    elif name.endswith(".txt"):
         return extract_txt(file)
 
-    if name.endswith(".md"):
+    elif name.endswith(".md"):
         return extract_md(file)
 
 
@@ -182,6 +171,7 @@ def create_chunks(
 
 
     for doc in documents:
+
 
         words=doc["text"].split()
 
@@ -215,13 +205,14 @@ def create_chunks(
 
 
 # ==========================
-# EMBEDDINGS + FAISS
+# EMBEDDINGS DATABASE
 # ==========================
 
 
 def create_database(chunks):
 
-    model=get_embedding_model()
+
+    model=load_embedding_model()
 
 
     texts=[
@@ -232,30 +223,15 @@ def create_database(chunks):
 
     embeddings=model.encode(
         texts,
-        show_progress_bar=False
-    )
-
-
-    embeddings=np.array(
-        embeddings
-    ).astype("float32")
-
-
-    index=faiss.IndexFlatL2(
-        embeddings.shape[1]
-    )
-
-
-    index.add(
-        embeddings
+        normalize_embeddings=True
     )
 
 
     return {
 
-        "index":index,
+        "chunks": chunks,
 
-        "chunks":chunks
+        "embeddings": embeddings
 
     }
 
@@ -264,7 +240,7 @@ def create_database(chunks):
 def save_database(database):
 
     with open(
-        DB_FILE,
+        DATABASE_FILE,
         "wb"
     ) as f:
 
@@ -277,67 +253,63 @@ def save_database(database):
 
 def load_database():
 
-    if os.path.exists(DB_FILE):
+    if os.path.exists(
+        DATABASE_FILE
+    ):
 
         with open(
-            DB_FILE,
+            DATABASE_FILE,
             "rb"
         ) as f:
 
             return pickle.load(f)
-
 
     return None
 
 
 
 # ==========================
-# SEARCH
+# HYBRID SEARCH
 # ==========================
 
 
 def semantic_search(
         question,
         database,
-        k=8):
+        top_k=8):
 
 
-    model=get_embedding_model()
+    model=load_embedding_model()
 
 
     query_embedding=model.encode(
-        [question]
-    )
+        [question],
+        normalize_embeddings=True
+    )[0]
 
 
-    query_embedding=np.array(
+    scores=np.dot(
+        database["embeddings"],
         query_embedding
-    ).astype("float32")
-
-
-    distances,ids = database["index"].search(
-        query_embedding,
-        k
     )
 
 
-    results=[]
+    best_indexes=np.argsort(
+        scores
+    )[::-1][:top_k]
 
 
-    for i in ids[0]:
-
-        results.append(
-            database["chunks"][i]
-        )
-
-
-    return results
+    return [
+        database["chunks"][i]
+        for i in best_indexes
+    ]
 
 
 
 def keyword_score(
         question,
         text):
+
 
     keywords=re.findall(
         r"\w+",
@@ -346,7 +318,6 @@ def keyword_score(
 
 
     score=0
-
 
     text=text.lower()
 
@@ -376,18 +347,19 @@ def hybrid_search(
     ranked=[]
 
 
-    for r in results:
+    for item in results:
+
 
         score=keyword_score(
             question,
-            r["text"]
+            item["text"]
         )
 
 
         ranked.append(
             (
                 score,
-                r
+                item
             )
         )
 
@@ -399,8 +371,8 @@ def hybrid_search(
 
 
     return [
-        item[1]
-        for item in ranked[:5]
+        x[1]
+        for x in ranked[:5]
     ]
 
 
@@ -426,7 +398,7 @@ def ask_groq(
             "GROQ_API_KEY missing"
         )
 
-        return
+        return None
 
 
 
@@ -437,18 +409,18 @@ def ask_groq(
 
     prompt=f"""
 
-You are a document assistant.
+You are an AI document assistant.
 
-Answer ONLY from the context below.
+Answer ONLY from the provided context.
 
-If the answer is not present,
+If the answer is not available,
 say:
 
 "I could not find this information
 in the provided documents."
 
 
-CONTEXT:
+DOCUMENT CONTEXT:
 
 {context}
 
@@ -485,7 +457,7 @@ QUESTION:
 
 uploaded_files=st.file_uploader(
 
-    "Upload Documents",
+    "Upload PDF, DOCX, TXT, MD",
 
     type=[
         "pdf",
@@ -547,6 +519,7 @@ database=st.session_state.get(
 )
 
 
+
 if database is None:
 
     database=load_database()
@@ -557,7 +530,7 @@ if database:
 
 
     st.success(
-        "Database ready"
+        "Document database ready"
     )
 
 
@@ -569,15 +542,15 @@ if database:
     if question:
 
 
-        results=hybrid_search(
+        sources=hybrid_search(
             question,
             database
         )
 
 
         context="\n\n".join(
-            r["text"]
-            for r in results
+            s["text"]
+            for s in sources
         )
 
 
@@ -591,22 +564,23 @@ if database:
             "Answer"
         )
 
+
         st.write(
             answer
         )
 
 
         st.subheader(
-            "Sources"
+            "Retrieved Sources"
         )
 
 
-        for r in results:
+        for source in sources:
 
             st.write(
-                f"📄 {r['filename']} | Page {r['page']}"
+                f"📄 {source['filename']} | Page: {source['page']}"
             )
 
             st.caption(
-                r["text"]
+                source["text"]
             )
