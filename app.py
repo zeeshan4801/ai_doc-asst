@@ -27,61 +27,66 @@ st.set_page_config(
 
 st.title("📄 AI Document Assistant")
 
-DATABASE_FILE = "document_database.pkl"
+
+DB_FILE = "document_database.pkl"
 
 
 # ==========================
 # EMBEDDING MODEL
 # ==========================
 
+
 @st.cache_resource
 def load_embedding_model():
 
     return SentenceTransformer(
-        "all-MiniLM-L6-v2"
+        "paraphrase-MiniLM-L3-v2",
+        device="cpu"
     )
 
 
 
 # ==========================
-# DOCUMENT EXTRACTION
+# EXTRACTION
 # ==========================
 
 
 def extract_pdf(file):
 
-    data=[]
+    results=[]
 
-    reader = PdfReader(file)
+    reader=PdfReader(file)
 
 
-    for page_number, page in enumerate(
+    for page_no,page in enumerate(
         reader.pages,
         start=1
     ):
 
-        text = page.extract_text()
+        text=page.extract_text()
+
 
         if text:
 
-            data.append({
+            results.append({
 
-                "text": text,
+                "text":text,
 
-                "filename": file.name,
+                "filename":file.name,
 
-                "page": page_number
+                "page":page_no
 
             })
 
 
-    return data
+    return results
 
 
 
 def extract_docx(file):
 
-    doc = Document(file)
+    doc=Document(file)
+
 
     text="\n".join(
         p.text for p in doc.paragraphs
@@ -89,9 +94,13 @@ def extract_docx(file):
 
 
     return [{
-        "text": text,
-        "filename": file.name,
-        "page": None
+
+        "text":text,
+
+        "filename":file.name,
+
+        "page":None
+
     }]
 
 
@@ -104,9 +113,13 @@ def extract_txt(file):
 
 
     return [{
-        "text": text,
-        "filename": file.name,
-        "page": None
+
+        "text":text,
+
+        "filename":file.name,
+
+        "page":None
+
     }]
 
 
@@ -120,6 +133,7 @@ def extract_md(file):
 
     html=markdown.markdown(raw)
 
+
     text=BeautifulSoup(
         html,
         "html.parser"
@@ -127,9 +141,13 @@ def extract_md(file):
 
 
     return [{
-        "text": text,
-        "filename": file.name,
-        "page": None
+
+        "text":text,
+
+        "filename":file.name,
+
+        "page":None
+
     }]
 
 
@@ -142,13 +160,13 @@ def extract_document(file):
     if name.endswith(".pdf"):
         return extract_pdf(file)
 
-    elif name.endswith(".docx"):
+    if name.endswith(".docx"):
         return extract_docx(file)
 
-    elif name.endswith(".txt"):
+    if name.endswith(".txt"):
         return extract_txt(file)
 
-    elif name.endswith(".md"):
+    if name.endswith(".md"):
         return extract_md(file)
 
 
@@ -163,8 +181,8 @@ def extract_document(file):
 
 def create_chunks(
         documents,
-        chunk_size=400,
-        overlap=80):
+        chunk_size=700,
+        overlap=100):
 
 
     chunks=[]
@@ -175,10 +193,12 @@ def create_chunks(
 
         words=doc["text"].split()
 
+
         start=0
 
 
         while start < len(words):
+
 
             end=start+chunk_size
 
@@ -205,7 +225,7 @@ def create_chunks(
 
 
 # ==========================
-# EMBEDDINGS DATABASE
+# DATABASE
 # ==========================
 
 
@@ -222,16 +242,21 @@ def create_database(chunks):
 
 
     embeddings=model.encode(
+
         texts,
+
+        batch_size=16,
+
         normalize_embeddings=True
+
     )
 
 
     return {
 
-        "chunks": chunks,
+        "chunks":chunks,
 
-        "embeddings": embeddings
+        "embeddings":embeddings
 
     }
 
@@ -240,7 +265,7 @@ def create_database(chunks):
 def save_database(database):
 
     with open(
-        DATABASE_FILE,
+        DB_FILE,
         "wb"
     ) as f:
 
@@ -253,12 +278,10 @@ def save_database(database):
 
 def load_database():
 
-    if os.path.exists(
-        DATABASE_FILE
-    ):
+    if os.path.exists(DB_FILE):
 
         with open(
-            DATABASE_FILE,
+            DB_FILE,
             "rb"
         ) as f:
 
@@ -269,7 +292,7 @@ def load_database():
 
 
 # ==========================
-# HYBRID SEARCH
+# SEARCH
 # ==========================
 
 
@@ -282,36 +305,43 @@ def semantic_search(
     model=load_embedding_model()
 
 
-    query_embedding=model.encode(
+    query=model.encode(
+
         [question],
+
         normalize_embeddings=True
+
     )[0]
 
 
     scores=np.dot(
+
         database["embeddings"],
-        query_embedding
+
+        query
+
     )
 
 
-    best_indexes=np.argsort(
+    indexes=np.argsort(
         scores
     )[::-1][:top_k]
 
 
     return [
+
         database["chunks"][i]
-        for i in best_indexes
+
+        for i in indexes
+
     ]
 
 
 
-def keyword_score(
-        question,
-        text):
+def keyword_score(question,text):
 
 
-    keywords=re.findall(
+    words=re.findall(
         r"\w+",
         question.lower()
     )
@@ -319,14 +349,15 @@ def keyword_score(
 
     score=0
 
+
     text=text.lower()
 
 
-    for word in keywords:
+    for word in words:
 
         if len(word)>3 and word in text:
 
-            score +=1
+            score+=1
 
 
     return score
@@ -351,8 +382,11 @@ def hybrid_search(
 
 
         score=keyword_score(
+
             question,
+
             item["text"]
+
         )
 
 
@@ -365,14 +399,20 @@ def hybrid_search(
 
 
     ranked.sort(
+
         key=lambda x:x[0],
+
         reverse=True
+
     )
 
 
     return [
+
         x[1]
+
         for x in ranked[:5]
+
     ]
 
 
@@ -382,9 +422,7 @@ def hybrid_search(
 # ==========================
 
 
-def ask_groq(
-        question,
-        context):
+def ask_groq(question,context):
 
 
     api_key=st.secrets.get(
@@ -402,56 +440,77 @@ def ask_groq(
 
 
 
-    client=Groq(
-        api_key=api_key
-    )
+    try:
 
 
-    prompt=f"""
+        client=Groq(
 
-You are an AI document assistant.
+            api_key=str(api_key).strip()
 
-Answer ONLY from the provided context.
-
-If the answer is not available,
-say:
-
-"I could not find this information
-in the provided documents."
+        )
 
 
-DOCUMENT CONTEXT:
+        response=client.chat.completions.create(
+
+            model="openai/gpt-oss-120b",
+
+            messages=[
+
+                {
+
+                    "role":"system",
+
+                    "content":
+                    """
+You are a document assistant.
+Answer only from the provided context.
+If information is missing say:
+'I could not find this information in the provided documents.'
+"""
+
+                },
+
+                {
+
+                    "role":"user",
+
+                    "content":
+                    f"""
+Context:
 
 {context}
 
 
-QUESTION:
+Question:
 
 {question}
-
 """
 
+                }
 
-    response=client.chat.completions.create(
+            ],
 
-        model="openai/gpt-oss-120b",
+            temperature=0.1
 
-        messages=[
-            {
-                "role":"user",
-                "content":prompt
-            }
-        ]
-
-    )
+        )
 
 
-    return response.choices[0].message.content
+        return response.choices[0].message.content
+
+
+
+    except Exception as e:
+
+        st.error(
+            f"Groq Error: {e}"
+        )
+
+        return None
 
 
 
 # ==========================
-# STREAMLIT UI
+# UI
 # ==========================
 
 
@@ -475,6 +534,16 @@ uploaded_files=st.file_uploader(
 if st.button("Process Documents"):
 
 
+    if not uploaded_files:
+
+        st.warning(
+            "Please upload documents first"
+        )
+
+        st.stop()
+
+
+
     documents=[]
 
 
@@ -483,6 +552,7 @@ if st.button("Process Documents"):
         documents.extend(
             extract_document(file)
         )
+
 
 
     st.success(
@@ -498,6 +568,7 @@ if st.button("Process Documents"):
     st.success(
         f"{len(chunks)} chunks created"
     )
+
 
 
     database=create_database(
@@ -530,7 +601,7 @@ if database:
 
 
     st.success(
-        "Document database ready"
+        "Database ready"
     )
 
 
@@ -539,24 +610,34 @@ if database:
     )
 
 
+
     if question:
 
 
         sources=hybrid_search(
+
             question,
+
             database
+
         )
 
 
         context="\n\n".join(
+
             s["text"]
+
             for s in sources
+
         )
 
 
         answer=ask_groq(
+
             question,
+
             context
+
         )
 
 
@@ -571,16 +652,18 @@ if database:
 
 
         st.subheader(
-            "Retrieved Sources"
+            "Sources"
         )
 
 
-        for source in sources:
+        for s in sources:
+
 
             st.write(
-                f"📄 {source['filename']} | Page: {source['page']}"
+                f"📄 {s['filename']} | Page: {s['page']}"
             )
 
+
             st.caption(
-                source["text"]
+                s["text"]
             )
